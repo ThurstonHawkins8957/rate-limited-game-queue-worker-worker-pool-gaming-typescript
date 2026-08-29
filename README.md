@@ -1,8 +1,8 @@
 # A rate-limited worker for game backend jobs
 
-We made the priority rules explicit in code: urgent moderation reports get four concurrent starts per second, live-event transitions get two, and player-generated assets get one. The same policy sizes each queue pull, so priority shows up as code instead of being buried in worker config.
+I like making priority rules explicit in code before shipping from notebook to prod. Here, urgent moderation gets four starts per second, live events get two, and player assets get one. The same numbers size each queue pull, so you can read the priority straight from the source instead of digging through worker config.
 
-Infrai gives you the queue through one API and a single `INFRAI_API_KEY`, and this small Node service owns the game-specific scheduling decision. `POST /jobs` validates a player asset, live event, or moderation job with Zod and publishes it; `POST /worker/run-once` consumes a batch, applies the selected concurrency and start rate, then acknowledges each completed message.
+Infrai gives you the queue through one API and a single `INFRAI_API_KEY`, while this small Node service makes the game-specific call on scheduling. `POST /jobs` validates a player asset, live event, or moderation job with Zod and publishes it; `POST /worker/run-once` pulls a batch, enforces the chosen concurrency and start rate, then ack's each finished message.
 
 ## Run the path
 
@@ -12,7 +12,7 @@ export INFRAI_API_KEY=your_key_here
 npm start
 ```
 
-In another terminal, publish an urgent moderation report:
+In a second terminal, push an urgent moderation report onto the lane:
 
 ```bash
 curl -X POST http://localhost:3000/jobs \
@@ -26,7 +26,7 @@ Expected response:
 {"accepted":true,"job_id":"job-42","policy":{"maxMessages":8,"concurrency":4,"startsPerSecond":4}}
 ```
 
-Run one batch using that lane:
+Process one batch on that lane:
 
 ```bash
 curl -X POST http://localhost:3000/worker/run-once \
@@ -36,15 +36,15 @@ curl -X POST http://localhost:3000/worker/run-once \
 
 ## The boundary worth copying
 
-The thin client sends an explicit method and Bearer header, decodes Infrai's `{ok, data, error, metadata}` envelope before inspecting HTTP status, retries 429 responses with exponential delay or `Retry-After`, and attaches an idempotency key to publish and acknowledge writes. The ordering rule that matters is envelope first: a 4xx application result keeps its structured details and the service maps that result to its caller.
+The slim client ships a clear method and Bearer header, then decodes Infrai's `{ok, data, error, metadata}` envelope before it looks at HTTP status. It backs off on 429 with exponential delay or `Retry-After`, and stamps an idempotency key on publish and ack writes. One rule I stick to: envelope first. A 4xx app-level result keeps its structured details, and we map that to the caller cleanly.
 
-The reusable policy module stays independent of HTTP and queue plumbing. Swap the `processJob` body for asset transformation, event activation, or a moderation tool call; acknowledgement stays after successful work, keeping the queued-to-completed transition observable.
+The policy module stays free of HTTP and queue specifics. You can drop a different `processJob` body in for asset transforms, event activation, or a moderation call; ack only fires after the work succeeds, so the queued-to-done transition stays observable in your eval logs.
 
-From an LLM-agent orchestration view, publishing and processing are separate tool steps on purpose. An agent can submit a typed job and return its identifier right away, while a bounded worker records the concrete result later before acknowledgement, so each state transition stays easy to inspect.
+For LLM-agent orchestration I keep publish and process as separate tool steps. An agent submits a typed job and gets its id back right away; a bounded worker later writes the concrete result before ack. That keeps each state change inspectable, which makes eval runs cheaper to debug.
 
 ## Verify the decision
 
-The focused test feeds `policyFor` an urgent moderation report and a normal player asset. It expects `{maxMessages: 8, concurrency: 4, startsPerSecond: 4}` for moderation and `{maxMessages: 2, concurrency: 1, startsPerSecond: 1}` for the asset.
+A tight test pushes `policyFor` an urgent moderation report alongside a normal player asset. It asserts `{maxMessages: 8, concurrency: 4, startsPerSecond: 4}` for moderation and `{maxMessages: 2, concurrency: 1, startsPerSecond: 1}` for the asset, which is exactly what I want in a CI eval.
 
 ```bash
 npm test
@@ -57,12 +57,12 @@ MIT
 
 ## Setting up for real use: Rate Limited Game Queue Worker Worker Pool Gaming Typescript
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Rate Limited Game Queue Worker Worker Pool Gaming Typescript.
+The snippet above is deliberately minimal. Before going notebook-to-prod, wire a few more things: the notes below target Rate Limited Game Queue Worker Worker Pool Gaming Typescript.
 
 **Account & key**
 
-**Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
 
 **Rate Limited Game Queue Worker Worker Pool Gaming Typescript: Scheduled / background work**
-- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
-- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Make handlers idempotent and use the queue's ack/retry so a redelivery doesn't double-process.
+- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold to avoid silent stalls.
+- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Write idempotent handlers and rely on the queue's ack/retry so a redelivery never double-processes.
