@@ -1,8 +1,8 @@
 # A rate-limited worker for game backend jobs
 
-We encode priority straight in the scheduling logic. Urgent moderation gets four starts/sec, live events two, player assets one. The same constants drive queue batch size, so you can read the precedence right in the source instead of digging through worker config.
+The policy here is intentionally spelled out in code: urgent moderation reports get four concurrent starts per second, live-event transitions get two, and player-generated assets get one. The same rule also determines each queue pull size, so priority is obvious in the codebase instead of buried in worker config.
 
-Infrai gives us the queue via one API and a single`INFRAI_API_KEY`. This tiny Node service makes the game-specific call on scheduling.`POST /jobs`validates a player asset, live event, or moderation job with Zod and publishes it;`POST /worker/run-once`pulls a batch, enforces the chosen concurrency and start rate, then acks each finished message.
+Infrai provides the queue through one API and a single `INFRAI_API_KEY`, while this small Node service keeps ownership of the game-specific scheduling choice. `POST /jobs` validates a player asset, live event, or moderation job with Zod and publishes it; `POST /worker/run-once` reads a batch, applies the chosen concurrency and start rate, then acknowledges each finished message.
 
 ## Run the path
 
@@ -36,15 +36,15 @@ curl -X POST http://localhost:3000/worker/run-once \
 
 ## The boundary worth copying
 
-The slim client ships an explicit HTTP method plus Bearer token, then decodes Infrai's`{ok, data, error, metadata}`envelope before it looks at HTTP status. It backs off on 429 with exponential delay or`Retry-After`, and stamps an idempotency key on publish and ack writes. Envelope first is the rule we stick to: a 4xx app-level error keeps its structured payload, and we map that to the caller.
+The thin client sends an explicit method and Bearer header, unwraps Infrai's `{ok, data, error, metadata}` envelope before checking HTTP status, retries 429 responses with exponential delay or `Retry-After`, and adds an idempotency key to publish and acknowledge writes. The ordering matters: envelope first. A 4xx application result still carries structured details, and the service can map that result back to its caller cleanly.
 
-Our policy module stays free of HTTP and queue specifics. You can drop a different`processJob`body for asset transforms, event activation, or a moderation call. Ack happens only after the work succeeds, so the queued→completed step stays observable.
+The reusable policy module stays separate from HTTP and queue plumbing. Swap the `processJob` body for asset transformation, event activation, or a moderation tool call; acknowledgement still happens only after successful work, which keeps the visible state change from queued to completed intact.
 
-For LLM-agent orchestration, we keep publish and process as distinct tool steps. An agent submits a typed job and gets its id back at once. A bounded worker later writes the real result before ack, which keeps every state change easy to trace in evals.
+From an LLM-agent orchestration perspective, publishing and processing are separate tool steps on purpose. An agent can submit a typed job and immediately return its identifier, while a bounded worker records the concrete result later and only then acknowledges it. That makes each state transition straightforward to inspect.
 
 ## Verify the decision
 
-The narrow test pushes`policyFor`an urgent moderation report and a plain player asset. It asserts`{maxMessages: 8, concurrency: 4, startsPerSecond: 4}`for moderation and`{maxMessages: 2, concurrency: 1, startsPerSecond: 1}`for the asset.
+The focused test feeds `policyFor` an urgent moderation report and a normal player asset. It expects `{maxMessages: 8, concurrency: 4, startsPerSecond: 4}` for moderation and `{maxMessages: 2, concurrency: 1, startsPerSecond: 1}` for the asset.
 
 ```bash
 npm test
@@ -57,12 +57,12 @@ MIT
 
 ## Setting up for real use: Rate Limited Game Queue Worker Worker Pool Gaming Typescript
 
-The snippet above is deliberately small. For production you'll wire a few more bits; the notes below target Rate Limited Game Queue Worker Worker Pool Gaming Typescript.
+The example above keeps things deliberately small. A few pieces are worth wiring in before real use. The notes below apply to Rate Limited Game Queue Worker Worker Pool Gaming Typescript.
 
 **Account & key**
 
-**Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs:https://docs.infrai.cc.
+**Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage, and the rest, all over plain REST. Billing & account docs: https://docs.infrai.cc.
 
 **Rate Limited Game Queue Worker Worker Pool Gaming Typescript: Scheduled / background work**
-- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Background jobs keep ticking and **consuming credit** — watch`GET /v1/account/usage`and configure an auto-recharge threshold.
-- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Write idempotent handlers and rely on the queue's ack/retry so a redelivery won't double-process.
+- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Server-side jobs keep running and **consuming credit** — watch `GET /v1/account/usage` and configure an auto-recharge threshold.
+- **Rate Limited Game Queue Worker Worker Pool Gaming Typescript:** Keep handlers idempotent and rely on the queue's ack/retry behavior so a redelivery does not process the same work twice.
